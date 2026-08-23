@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Society of Jesus</title>
+<link rel="icon" href="assets/logo.svg">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="topbar sign-in">
+  <img src="assets/logo.svg" alt="Society of Jesus seal" style="width:50px;height:50px;">
+  <span class="script" style="font-size:1.8rem; color:var(--gold-bright);">Society of Jesus</span>
+</div>
+
+<div class="signin-wrap">
+  <div class="signin-card">
+    <img src="assets/logo.svg" alt="" class="seal">
+    <h1>Welcome</h1>
+    <p class="motto">Ad Majorem Dei Gloriam</p>
+
+    <form id="signinForm">
+      <div class="field">
+        <label for="username">What is your name?</label>
+        <input type="text" id="username" placeholder="Enter your name" autocomplete="off" required>
+      </div>
+      <button type="submit" class="btn full">Sign In</button>
+    </form>
+  </div>
+</div>
+
+<script src="js/app.js"></script>
+<script>
+  // pre-fill if a name was saved before
+  (function(){
+    const saved = getCurrentUser();
+    if(saved && saved !== ADMIN_KEY){ document.getElementById('username').value = saved; }
+  })();
+
+  document.getElementById('signinForm').addEventListener('submit', function(e){
+    e.preventDefault();
+    const name = document.getElementById('username').value.trim();
+    if(!name) return;
+
+    setCurrentUser(name);
+
+    const db = loadDB();
+    if(!db.users[name]){
+      db.users[name] = { joined: Date.now() };
+      saveDB(db);
+    }
+
+    if(name === ADMIN_KEY){
+      window.location.href = "admin.html";
+    } else {
+      window.location.href = "main.html";
+    }
+  });
+</script>
+
+</body>
+</html>

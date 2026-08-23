@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Settings — Society of Jesus</title>
+<link rel="icon" href="assets/logo.svg">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="topbar main">
+  <a class="back-link" href="main.html">&larr; Main Menu</a>
+  <div class="brand">
+    <img src="assets/logo.svg" alt="Society of Jesus seal" style="width:38px;height:38px;">
+    <span class="script" style="font-size:1.4rem;">Society of Jesus</span>
+  </div>
+</div>
+
+<div class="container">
+  <h1>Settings</h1>
+  <div class="settings-tabs">
+    <button data-tab="username" class="active">Edit Username</button>
+    <button data-tab="olderNews">Older News</button>
+    <button data-tab="socials">Social Links</button>
+    <button data-tab="info">Information</button>
+    <button data-tab="rooms">Rooms</button>
+    <button data-tab="grading" id="gradingTabBtn" style="display:none;">Grade Exams</button>
+  </div>
+
+  <div class="panel" id="panel"></div>
+</div>
+
+<script src="js/app.js"></script>
+<script>
+  const user = requireAuth();
+  const admin = isAdmin();
+  const db = loadDB();
+  const panel = document.getElementById('panel');
+  const buttons = document.querySelectorAll('.settings-tabs button');
+  if(admin) document.getElementById('gradingTabBtn').style.display = 'inline-block';
+
+  buttons.forEach(b => b.addEventListener('click', () => {
+    buttons.forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    render(b.dataset.tab);
+  }));
+
+  function render(tab){
+    if(tab === 'username') return renderUsername();
+    if(tab === 'olderNews') return renderOlderNews();
+    if(tab === 'socials') return renderSocials();
+    if(tab === 'info') return renderInfo();
+    if(tab === 'rooms') return renderRooms();
+    if(tab === 'grading') return renderGrading();
+  }
+
+  function renderGrading(){
+    if(!admin){ panel.innerHTML = `<div class="empty">Admins only.</div>`; return; }
+    const rows = [];
+    db.exams.forEach(ex => {
+      (ex.submissions || []).forEach(sub => {
+        rows.push({ examId: ex.id, examTitle: ex.title, questions: ex.questions, ...sub });
+      });
+    });
+    panel.innerHTML = `<h2>Exam Submissions</h2>` + (rows.length === 0
+      ? `<div class="empty">No submissions yet.</div>`
+      : rows.map((r, idx) => `
+        <div class="list-row" data-idx="${idx}">
+          <div>
+            <strong>${escapeHTML(r.username)}</strong> — ${escapeHTML(r.examTitle)}<br>
+            <span style="font-size:.85rem;color:#8a7360;">Submitted ${fmtDate(r.submittedAt)}</span>
+          </div>
+          <div class="row">
+            ${r.graded ? `<span class="graded">Score: ${r.score} / 100</span>` : `<span class="pending">Ungraded</span>`}
+            <button class="btn ghost small grade-btn">${r.graded ? 'Review' : 'Grade'}</button>
+          </div>
+        </div>`).join(''));
+
+    panel.querySelectorAll('.grade-btn').forEach(btn => btn.addEventListener('click', (e) => {
+      const idx = e.target.closest('.list-row').dataset.idx;
+      openGradeModal(rows[idx]);
+    }));
+  }
+
+  function openGradeModal(sub){
+    const textQs = sub.questions.filter(q => q.type !== 'mcq');
+    const mcqQs = sub.questions.filter(q => q.type === 'mcq');
+    const perQ = 100 / sub.questions.length;
+    const mcqSummary = mcqQs.map(q => {
+      const given = sub.answers[q.id];
+      const correct = given === q.correctIndex;
+      return `<p>MCQ: "${escapeHTML(q.prompt)}" — answered "${escapeHTML(q.options[given] ?? '—')}" ${correct ? '(correct)' : '(incorrect)'}</p>`;
+    }).join('');
+    const textFields = textQs.map(q => `
+      <fieldset>
+        <legend>${escapeHTML(q.prompt)}</legend>
+        <p style="white-space:pre-wrap;">${escapeHTML(sub.answers[q.id] || '')}</p>
+        <label>Points (0–${perQ.toFixed(1)})</label>
+        <input type="number" min="0" max="${perQ}" step="0.5" class="text-points" data-qid="${q.id}" value="${(sub.gradedPoints && sub.gradedPoints[q.id]) || 0}">
+      </fieldset>`).join('');
+
+    const m = openModal(`
+      <h2>Grade — ${escapeHTML(sub.username)}</h2>
+      ${mcqSummary}
+      ${textFields || '<p>No open questions to grade.</p>'}
+      <button class="btn full" id="commitGrade" style="margin-top:14px;">Save Grade</button>`);
+
+    m.querySelector('#commitGrade').addEventListener('click', () => {
+      let autoPoints = 0;
+      mcqQs.forEach(q => { if(sub.answers[q.id] === q.correctIndex) autoPoints += perQ; });
+      let textPoints = 0;
+      const gradedPoints = {};
+      m.querySelectorAll('.text-points').forEach(inp => {
+        const val = Math.min(Number(inp.value) || 0, perQ);
+        gradedPoints[inp.dataset.qid] = val;
+        textPoints += val;
+      });
+      const fresh = loadDB();
+      const freshExam = fresh.exams.find(ex => ex.id === sub.examId);
+      const freshSub = freshExam.submissions.find(s => s.username === sub.username && s.submittedAt === sub.submittedAt);
+      freshSub.score = Math.round(autoPoints + textPoints);
+      freshSub.graded = true;
+      freshSub.gradedPoints = gradedPoints;
+      saveDB(fresh);
+      m.remove();
+      location.reload();
+    });
+  }
+
+  function renderUsername(){
+    panel.innerHTML = `
+      <h2>Edit Username</h2>
+      <div class="field">
+        <label>Your current name is <strong>${escapeHTML(user)}</strong></label>
+        <input type="text" id="newName" placeholder="New name" value="${escapeHTML(user)}">
+      </div>
+      <button class="btn" id="saveName">Save</button>
+      <p id="nameMsg" style="margin-top:10px;"></p>`;
+    document.getElementById('saveName').addEventListener('click', () => {
+      const val = document.getElementById('newName').value.trim();
+      if(!val) return;
+      const fresh = loadDB();
+      if(!fresh.users[val]) fresh.users[val] = { joined: Date.now() };
+      saveDB(fresh);
+      setCurrentUser(val);
+      document.getElementById('nameMsg').textContent = "Saved! Your name is now " + val + ".";
+      document.getElementById('nameMsg').className = "graded";
+    });
+  }
+
+  function renderOlderNews(){
+    const expired = db.news.filter(n => isExpired(n.expiresAt)).sort((a,b) => b.expiresAt - a.expiresAt);
+    panel.innerHTML = `<h2>Older News</h2>` + (expired.length === 0
+      ? `<div class="empty">No expired news to show.</div>`
+      : expired.map(n => `
+        <div class="list-row" data-id="${n.id}">
+          <div>
+            <strong>${escapeHTML(n.title)}</strong><br>
+            <span style="font-size:.85rem;color:#8a7360;">Expired ${fmtDate(n.expiresAt)}</span>
+          </div>
+          <div class="row">
+            <button class="btn ghost small view-old">View</button>
+            ${admin ? '<button class="btn danger small del-old">Delete</button>' : ''}
+          </div>
+        </div>`).join(''));
+
+    panel.querySelectorAll('.view-old').forEach(btn => btn.addEventListener('click', (e) => {
+      const id = e.target.closest('.list-row').dataset.id;
+      window.location.href = `news.html?id=${id}`;
+    }));
+    panel.querySelectorAll('.del-old').forEach(btn => btn.addEventListener('click', (e) => {
+      if(!confirm('Delete this news permanently?')) return;
+      const id = e.target.closest('.list-row').dataset.id;
+      const fresh = loadDB();
+      fresh.news = fresh.news.filter(n => n.id !== id);
+      saveDB(fresh);
+      location.reload();
+    }));
+  }
+
+  function renderSocials(){
+    panel.innerHTML = `<h2>Social Links</h2>` +
+      (db.socialLinks.length === 0 ? `<div class="empty">No links added yet.</div>` :
+        db.socialLinks.map(s => `
+          <div class="list-row" data-id="${s.id}">
+            <div><strong>${escapeHTML(s.label)}</strong></div>
+            <div class="row">
+              <a class="btn small" href="${s.url}" target="_blank" rel="noopener">Open</a>
+              ${admin ? '<button class="btn danger small del-social">Remove</button>' : ''}
+            </div>
+          </div>`).join('')) +
+      (admin ? `
+        <fieldset style="margin-top:18px;">
+          <legend>Add a link</legend>
+          <div class="row">
+            <input type="text" id="socialLabel" placeholder="Label (e.g. Discord)" style="flex:1;">
+            <input type="url" id="socialUrl" placeholder="https://..." style="flex:2;">
+            <button class="btn small" id="addSocial">Add</button>
+          </div>
+        </fieldset>` : '');
+
+    panel.querySelectorAll('.del-social').forEach(btn => btn.addEventListener('click', (e) => {
+      const id = e.target.closest('.list-row').dataset.id;
+      const fresh = loadDB();
+      fresh.socialLinks = fresh.socialLinks.filter(s => s.id !== id);
+      saveDB(fresh);
+      location.reload();
+    }));
+    const addBtn = document.getElementById('addSocial');
+    if(addBtn) addBtn.addEventListener('click', () => {
+      const label = document.getElementById('socialLabel').value.trim();
+      const url = document.getElementById('socialUrl').value.trim();
+      if(!label || !url) return;
+      const fresh = loadDB();
+      fresh.socialLinks.push({ id: uid(), label, url });
+      saveDB(fresh);
+      location.reload();
+    });
+  }
+
+  function renderInfo(){
+    panel.innerHTML = `
+      <h2>Information</h2>
+      <p id="infoText" style="white-space:pre-wrap;">${escapeHTML(db.information)}</p>
+      ${admin ? `
+        <textarea id="infoEdit" rows="8">${escapeHTML(db.information)}</textarea>
+        <div style="margin-top:10px;"><button class="btn" id="saveInfo">Save</button></div>` : ''}`;
+    const saveBtn = document.getElementById('saveInfo');
+    if(saveBtn) saveBtn.addEventListener('click', () => {
+      const fresh = loadDB();
+      fresh.information = document.getElementById('infoEdit').value;
+      saveDB(fresh);
+      location.reload();
+    });
+  }
+
+  function renderRooms(){
+    panel.innerHTML = `
+      <h2>Rooms</h2>
+      ${db.roomsLink
+        ? `<p>The rooms sheet shows where each member is assigned.</p><a class="btn" href="${db.roomsLink}" target="_blank" rel="noopener">Open Rooms Sheet</a>`
+        : `<div class="empty">No rooms link has been added yet.</div>`}
+      ${admin ? `
+        <fieldset style="margin-top:18px;">
+          <legend>Set rooms link</legend>
+          <div class="row">
+            <input type="url" id="roomsUrl" placeholder="https://docs.google.com/spreadsheets/..." style="flex:1;" value="${db.roomsLink || ''}">
+            <button class="btn small" id="saveRooms">Save</button>
+          </div>
+        </fieldset>` : ''}`;
+    const saveBtn = document.getElementById('saveRooms');
+    if(saveBtn) saveBtn.addEventListener('click', () => {
+      const fresh = loadDB();
+      fresh.roomsLink = document.getElementById('roomsUrl').value.trim();
+      saveDB(fresh);
+      location.reload();
+    });
+  }
+
+  render('username');
+  renderFooter();
+</script>
+
+</body>
+</html>

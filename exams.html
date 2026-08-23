@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Exam — Society of Jesus</title>
+<link rel="icon" href="assets/logo.svg">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="topbar main">
+  <a class="back-link" href="main.html">&larr; Main Menu</a>
+  <div class="brand">
+    <img src="assets/logo.svg" alt="Society of Jesus seal" style="width:38px;height:38px;">
+    <span class="script" style="font-size:1.4rem;">Society of Jesus</span>
+  </div>
+</div>
+
+<div class="container" id="container">
+  <div class="empty">Loading exam...</div>
+</div>
+
+<script src="js/app.js"></script>
+<script>
+  const user = requireAuth();
+  const params = new URLSearchParams(location.search);
+  const id = params.get('id');
+  const db = loadDB();
+  const exam = db.exams.find(e => e.id === id);
+  const container = document.getElementById('container');
+
+  if(!exam){
+    container.innerHTML = `<div class="empty">This exam could not be found.</div>`;
+  } else {
+    const mySubmission = (exam.submissions || []).find(s => s.username === user);
+    const expired = isExpired(exam.expiresAt);
+
+    if(mySubmission){
+      container.innerHTML = `
+        <div class="panel">
+          <h1>${escapeHTML(exam.title)}</h1>
+          <p>${escapeHTML(exam.description || '')}</p>
+          <p>You have already submitted this exam.</p>
+          <p>${mySubmission.graded
+            ? `<span class="graded">Score: ${mySubmission.score} / 100</span>`
+            : `<span class="pending">Awaiting grading by the admin</span>`}</p>
+        </div>`;
+    } else if(expired){
+      container.innerHTML = `
+        <div class="panel">
+          <h1>${escapeHTML(exam.title)}</h1>
+          <p>This exam has closed and can no longer be taken.</p>
+        </div>`;
+    } else {
+      const qHTML = exam.questions.map((q, i) => {
+        if(q.type === 'mcq'){
+          const opts = q.options.map((o, oi) => `
+            <label style="display:block;margin:6px 0;">
+              <input type="radio" name="q_${q.id}" value="${oi}" required> ${escapeHTML(o)}
+            </label>`).join('');
+          return `<fieldset><legend>Question ${i+1} (multiple choice)</legend><p>${escapeHTML(q.prompt)}</p>${opts}</fieldset>`;
+        } else {
+          return `<fieldset><legend>Question ${i+1} (short answer)</legend><p>${escapeHTML(q.prompt)}</p>
+            <textarea name="q_${q.id}" rows="3" required></textarea></fieldset>`;
+        }
+      }).join('');
+
+      container.innerHTML = `
+        <div class="panel">
+          <h1>${escapeHTML(exam.title)}</h1>
+          <p>${escapeHTML(exam.description || '')}</p>
+          <p style="font-size:.85rem;color:#8a7360;">Closes ${fmtDate(exam.expiresAt)} &middot; Taking as <strong>${escapeHTML(user)}</strong></p>
+          <form id="examForm" class="form-grid">${qHTML}<button type="submit" class="btn full">Submit Exam</button></form>
+        </div>`;
+
+      document.getElementById('examForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const answers = {};
+        let autoPoints = 0;
+        let hasText = false;
+        const perQ = 100 / exam.questions.length;
+
+        exam.questions.forEach(q => {
+          if(q.type === 'mcq'){
+            const val = e.target[`q_${q.id}`].value;
+            answers[q.id] = Number(val);
+            if(Number(val) === q.correctIndex) autoPoints += perQ;
+          } else {
+            hasText = true;
+            answers[q.id] = e.target[`q_${q.id}`].value;
+          }
+        });
+
+        const fresh = loadDB();
+        const freshExam = fresh.exams.find(ex => ex.id === exam.id);
+        freshExam.submissions = freshExam.submissions || [];
+        freshExam.submissions.push({
+          username: user,
+          answers,
+          score: hasText ? Math.round(autoPoints) : Math.round(autoPoints),
+          graded: !hasText,
+          gradedPoints: {},
+          submittedAt: Date.now()
+        });
+        saveDB(fresh);
+        location.reload();
+      });
+    }
+  }
+
+  renderFooter();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Society of Jesus — Main Menu</title>
+<link rel="icon" href="assets/logo.svg">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="topbar main">
+  <div class="left-actions">
+    <a class="icon-btn" href="settings.html" title="Settings">&#9881;</a>
+  </div>
+  <div class="brand">
+    <img src="assets/logo.svg" alt="Society of Jesus seal">
+    <span class="script">Society of Jesus</span>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="welcome">
+    <h1>Welcome, <span class="script" id="welcomeName">Friend</span></h1>
+  </div>
+
+  <!-- NEWS -->
+  <div class="section-title"><div class="rule"></div><h2>News</h2><div class="rule rev"></div></div>
+  <div class="hscroll" id="newsRow"></div>
+
+  <!-- EXAMS & POLLS -->
+  <div class="section-title"><div class="rule"></div><h2>Exams &amp; Polls</h2><div class="rule rev"></div></div>
+  <div class="hscroll" id="examsPollsRow"></div>
+
+  <!-- LITURGICAL BOOKS -->
+  <div class="section-title"><div class="rule"></div><h2>Liturgical Books</h2><div class="rule rev"></div></div>
+  <div class="hscroll" id="booksRow"></div>
+
+  <!-- DIOCESES -->
+  <div class="section-title"><div class="rule"></div><h2>Dioceses We Are With</h2><div class="rule rev"></div></div>
+  <div class="dioceses-wrap" id="diocesesRow"></div>
+
+</div>
+
+<script src="js/app.js"></script>
+<script>
+  const user = requireAuth();
+  if(user === ADMIN_KEY){ window.location.href = "admin.html"; }
+
+  document.getElementById('welcomeName').textContent = user;
+  const db = loadDB();
+
+  /* ---------- NEWS ---------- */
+  const newsRow = document.getElementById('newsRow');
+  const activeNews = db.news
+    .filter(n => !isExpired(n.expiresAt))
+    .sort((a,b) => (b.urgent - a.urgent) || (b.createdAt - a.createdAt));
+
+  if(activeNews.length === 0){
+    newsRow.innerHTML = `<div class="empty">No news at this time. Check back soon.</div>`;
+  } else {
+    activeNews.forEach(n => {
+      const card = document.createElement('div');
+      card.className = 'card-news';
+      const img = (n.images && n.images[0]) ? n.images[0] : '';
+      card.innerHTML = `
+        ${n.urgent ? '<span class="badge-urgent">Urgent</span>' : ''}
+        <div class="img" style="${img ? `background-image:url('${img}')` : ''}"></div>
+        <div class="body">
+          <h3>${escapeHTML(n.title)}</h3>
+          <p>${escapeHTML(n.summary || '')}</p>
+          <div class="meta">Expires ${fmtDate(n.expiresAt)}</div>
+        </div>`;
+      card.addEventListener('click', () => window.location.href = `news.html?id=${n.id}`);
+      newsRow.appendChild(card);
+    });
+  }
+
+  /* ---------- EXAMS & POLLS ---------- */
+  const epRow = document.getElementById('examsPollsRow');
+  const activeExams = db.exams.filter(x => !isExpired(x.expiresAt)).map(x => ({...x, kind:'exam'}));
+  const activePolls = db.polls.filter(x => !isExpired(x.expiresAt)).map(x => ({...x, kind:'poll'}));
+  const combined = [...activeExams, ...activePolls].sort((a,b)=> (a.expiresAt||0) - (b.expiresAt||0));
+
+  if(combined.length === 0){
+    epRow.innerHTML = `<div class="empty">No exams or polls open right now.</div>`;
+  } else {
+    combined.forEach(item => {
+      const card = document.createElement('div');
+      card.className = 'card-wide';
+      card.innerHTML = `
+        <span class="tag">${item.kind === 'exam' ? 'Exam' : 'Poll'}</span>
+        <h3>${escapeHTML(item.title)}</h3>
+        <div class="meta">Closes ${fmtDate(item.expiresAt)}</div>`;
+      card.addEventListener('click', () => {
+        window.location.href = `${item.kind}s.html?id=${item.id}`;
+      });
+      epRow.appendChild(card);
+    });
+  }
+
+  /* ---------- BOOKS ---------- */
+  const booksRow = document.getElementById('booksRow');
+  if(db.books.length === 0){
+    booksRow.innerHTML = `<div class="empty">No liturgical books have been added yet.</div>`;
+  } else {
+    db.books.forEach(b => {
+      const card = document.createElement('div');
+      card.className = 'card-book';
+      card.innerHTML = `<div><h3>${escapeHTML(b.name)}</h3><p>${escapeHTML(b.description||'')}</p></div><div class="open">Open PDF &rarr;</div>`;
+      card.addEventListener('click', () => window.open(b.link, '_blank', 'noopener'));
+      booksRow.appendChild(card);
+    });
+  }
+
+  /* ---------- DIOCESES ---------- */
+  const dRow = document.getElementById('diocesesRow');
+  if(db.dioceses.length === 0){
+    dRow.innerHTML = `<div class="empty">No dioceses have been added yet.</div>`;
+  } else {
+    const sorted = [...db.dioceses].sort((a,b) => (b.important - a.important));
+    sorted.forEach(d => {
+      const card = document.createElement('div');
+      card.className = `diocese-card ${d.important ? 'important' : 'minor'}`;
+      card.innerHTML = `
+        <div class="img" style="${d.image ? `background-image:url('${d.image}')` : ''}"></div>
+        <div class="name">${escapeHTML(d.name)}</div>`;
+      dRow.appendChild(card);
+    });
+  }
+
+  renderFooter();
+</script>
+
+</body>
+</html>

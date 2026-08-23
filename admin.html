@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin — Society of Jesus</title>
+<link rel="icon" href="assets/logo.svg">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="topbar main">
+  <div class="left-actions">
+    <a class="icon-btn" href="settings.html" title="Settings">&#9881;</a>
+  </div>
+  <div class="brand">
+    <img src="assets/logo.svg" alt="Society of Jesus seal">
+    <span class="script">Society of Jesus — Admin</span>
+  </div>
+</div>
+
+<div class="container">
+  <h1>Administration</h1>
+  <div class="settings-tabs">
+    <button data-tab="news" class="active">News</button>
+    <button data-tab="exams">Exams</button>
+    <button data-tab="polls">Polls</button>
+    <button data-tab="dioceses">Dioceses</button>
+    <button data-tab="books">Liturgical Books</button>
+    <button data-tab="users">Users</button>
+  </div>
+  <div class="panel" id="panel"></div>
+</div>
+
+<script src="js/app.js"></script>
+<script>
+requireAdmin();
+const panel = document.getElementById('panel');
+const buttons = document.querySelectorAll('.settings-tabs button');
+buttons.forEach(b => b.addEventListener('click', () => {
+  buttons.forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  render(b.dataset.tab);
+}));
+
+function render(tab){
+  if(tab === 'news') return renderNews();
+  if(tab === 'exams') return renderExams();
+  if(tab === 'polls') return renderPolls();
+  if(tab === 'dioceses') return renderDioceses();
+  if(tab === 'books') return renderBooks();
+  if(tab === 'users') return renderUsers();
+}
+
+/* ================= NEWS ================= */
+function renderNews(){
+  const db = loadDB();
+  const active = db.news.filter(n => !isExpired(n.expiresAt));
+  panel.innerHTML = `
+    <h2>News</h2>
+    ${active.length === 0 ? '<div class="empty">No active news.</div>' : active.map(n => `
+      <div class="list-row" data-id="${n.id}">
+        <div><strong>${escapeHTML(n.title)}</strong> ${n.urgent ? '<span class="chip">Urgent</span>' : ''}<br>
+        <span style="font-size:.85rem;color:#8a7360;">Expires ${fmtDate(n.expiresAt)}</span></div>
+        <button class="btn danger small del-news">Delete</button>
+      </div>`).join('')}
+    <fieldset style="margin-top:20px;">
+      <legend>Add News</legend>
+      <form id="newsForm" class="form-grid">
+        <div class="field"><label>Title</label><input type="text" id="nTitle" required></div>
+        <div class="field"><label>Summary (shown on card)</label><input type="text" id="nSummary" required></div>
+        <div class="field"><label>Details (shown when opened)</label><textarea id="nDetails" rows="4"></textarea></div>
+        <div class="field"><label>Link label (optional)</label><input type="text" id="nLinkLabel"></div>
+        <div class="field"><label>Link URL (optional)</label><input type="url" id="nLinkUrl"></div>
+        <div class="field"><label>Image(s)</label><input type="file" id="nImages" accept="image/*" multiple></div>
+        <div class="field"><label>Expires in (days, max 10)</label><input type="number" id="nDays" min="1" max="10" value="7" required></div>
+        <label><input type="checkbox" id="nUrgent"> Mark as urgent</label>
+        <button type="submit" class="btn full">Publish News</button>
+      </form>
+    </fieldset>`;
+
+  panel.querySelectorAll('.del-news').forEach(btn => btn.addEventListener('click', (e) => {
+    const id = e.target.closest('.list-row').dataset.id;
+    const fresh = loadDB();
+    fresh.news = fresh.news.filter(n => n.id !== id);
+    saveDB(fresh);
+    renderNews();
+  }));
+
+  document.getElementById('newsForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const files = document.getElementById('nImages').files;
+    const images = [];
+    for(const f of files){ images.push(await fileToDataURL(f)); }
+    const days = Math.min(10, Math.max(1, Number(document.getElementById('nDays').value)));
+    const links = [];
+    const ll = document.getElementById('nLinkLabel').value.trim();
+    const lu = document.getElementById('nLinkUrl').value.trim();
+    if(lu) links.push({ label: ll || lu, url: lu });
+
+    const fresh = loadDB();
+    fresh.news.push({
+      id: uid(),
+      title: document.getElementById('nTitle').value.trim(),
+      summary: document.getElementById('nSummary').value.trim(),
+      details: document.getElementById('nDetails').value.trim(),
+      images, links,
+      urgent: document.getElementById('nUrgent').checked,
+      createdAt: Date.now(),
+      expiresAt: daysFromNow(days)
+    });
+    saveDB(fresh);
+    renderNews();
+  });
+}
+
+/* ================= EXAMS ================= */
+let examQuestions = [];
+
+function qEditorHTML(q, i){
+  if(q.type === 'mcq'){
+    const optsHTML = q.options.map((o, oi) => `
+      <div class="row" style="margin:4px 0;">
+        <input type="radio" name="correct_${i}" ${oi === q.correctIndex ? 'checked' : ''} class="correct-radio" data-qi="${i}" data-oi="${oi}">
+        <input type="text" class="opt-input" data-qi="${i}" data-oi="${oi}" value="${escapeHTML(o)}" placeholder="Option ${oi+1}" style="flex:1;">
+      </div>`).join('');
+    return `
+      <fieldset>
+        <legend>Question ${i+1} — Multiple choice</legend>
+        <input type="text" class="q-prompt" data-qi="${i}" placeholder="Question text" value="${escapeHTML(q.prompt)}">
+        ${optsHTML}
+        <div class="row" style="margin-top:6px;">
+          <button type="button" class="btn ghost small add-opt" data-qi="${i}">+ Option</button>
+          <button type="button" class="btn danger small rm-q" data-qi="${i}">Remove Question</button>
+        </div>
+        <p style="font-size:.8rem;color:#8a7360;">Select the radio button beside the correct option.</p>
+      </fieldset>`;
+  }
+  return `
+    <fieldset>
+      <legend>Question ${i+1} — Open-ended (graded by admin)</legend>
+      <input type="text" class="q-prompt" data-qi="${i}" placeholder="Question text" value="${escapeHTML(q.prompt)}">
+      <div class="row" style="margin-top:6px;">
+        <button type="button" class="btn danger small rm-q" data-qi="${i}">Remove Question</button>
+      </div>
+    </fieldset>`;
+}
+
+function renderQList(){
+  const qList = document.getElementById('qList');
+  qList.innerHTML = examQuestions.map((q, i) => qEditorHTML(q, i)).join('');
+
+  qList.querySelectorAll('.q-prompt').forEach(inp => inp.addEventListener('input', (e) => {
+    examQuestions[e.target.dataset.qi].prompt = e.target.value;
+  }));
+  qList.querySelectorAll('.opt-input').forEach(inp => inp.addEventListener('input', (e) => {
+    const qi = e.target.dataset.qi, oi = e.target.dataset.oi;
+    examQuestions[qi].options[oi] = e.target.value;
+  }));
+  qList.querySelectorAll('.correct-radio').forEach(r => r.addEventListener('change', (e) => {
+    examQuestions[e.target.dataset.qi].correctIndex = Number(e.target.dataset.oi);
+  }));
+  qList.querySelectorAll('.add-opt').forEach(btn => btn.addEventListener('click', (e) => {
+    examQuestions[e.target.dataset.qi].options.push('');
+    renderQList();
+  }));
+  qList.querySelectorAll('.rm-q').forEach(btn => btn.addEventListener('click', (e) => {
+    examQuestions.splice(Number(e.target.dataset.qi), 1);
+    renderQList();
+  }));
+}
+
+function renderExams(){
+  const db = loadDB();
+  examQuestions = [];
+  panel.innerHTML = `
+    <h2>Exams</h2>
+    ${db.exams.length === 0 ? '<div class="empty">No exams yet.</div>' : db.exams.map(x => `
+      <div class="list-row" data-id="${x.id}">
+        <div><strong>${escapeHTML(x.title)}</strong><br>
+        <span style="font-size:.85rem;color:#8a7360;">${x.questions.length} question(s) &middot; ${x.submissions.length} submission(s) &middot; ${isExpired(x.expiresAt) ? 'Closed' : 'Open until ' + fmtDate(x.expiresAt)}</span></div>
+        <button class="btn danger small del-exam">Delete</button>
+      </div>`).join('')}
+    <fieldset style="margin-top:20px;">
+      <legend>Create Exam</legend>
+      <div class="form-grid">
+        <div class="field"><label>Title</label><input type="text" id="eTitle" required></div>
+        <div class="field"><label>Description</label><textarea id="eDesc" rows="2"></textarea></div>
+        <div class="field"><label>Expiration date</label><input type="date" id="eDate" required></div>
+        <div id="qList"></div>
+        <div class="row">
+          <button type="button" class="btn ghost small" id="addMCQ">+ Multiple choice question</button>
+          <button type="button" class="btn ghost small" id="addText">+ Open-ended question</button>
+        </div>
+        <button type="button" class="btn full" id="createExam">Create Exam</button>
+      </div>
+    </fieldset>`;
+
+  panel.querySelectorAll('.del-exam').forEach(btn => btn.addEventListener('click', (e) => {
+    const id = e.target.closest('.list-row').dataset.id;
+    const fresh = loadDB();
+    fresh.exams = fresh.exams.filter(x => x.id !== id);
+    saveDB(fresh);
+    renderExams();
+  }));
+
+  document.getElementById('addMCQ').addEventListener('click', () => {
+    examQuestions.push({ id: uid(), type: 'mcq', prompt: '', options: ['', ''], correctIndex: 0 });
+    renderQList();
+  });
+  document.getElementById('addText').addEventListener('click', () => {
+    examQuestions.push({ id: uid(), type: 'text', prompt: '' });
+    renderQList();
+  });
+  document.getElementById('createExam').addEventListener('click', () => {
+    const title = document.getElementById('eTitle').value.trim();
+    const dateVal = document.getElementById('eDate').value;
+    if(!title || !dateVal || examQuestions.length === 0){
+      alert('Please add a title, an expiration date, and at least one question.');
+      return;
+    }
+    const fresh = loadDB();
+    fresh.exams.push({
+      id: uid(),
+      title,
+      description: document.getElementById('eDesc').value.trim(),
+      questions: examQuestions,
+      submissions: [],
+      expiresAt: new Date(dateVal).getTime(),
+      createdAt: Date.now()
+    });
+    saveDB(fresh);
+    renderExams();
+  });
+
+  renderQList();
+}
+
+/* ================= POLLS ================= */
+let pollOptions = ['', ''];
+
+function renderPollOptions(){
+  const list = document.getElementById('pollOptList');
+  list.innerHTML = pollOptions.map((o, i) => `
+    <div class="row" style="margin:4px 0;">
+      <input type="text" class="poll-opt" data-i="${i}" value="${escapeHTML(o)}" placeholder="Option ${i+1}" style="flex:1;">
+      <button type="button" class="btn danger small rm-popt" data-i="${i}">&times;</button>
+    </div>`).join('');
+  list.querySelectorAll('.poll-opt').forEach(inp => inp.addEventListener('input', (e) => {
+    pollOptions[e.target.dataset.i] = e.target.value;
+  }));
+  list.querySelectorAll('.rm-popt').forEach(btn => btn.addEventListener('click', (e) => {
+    pollOptions.splice(Number(e.target.dataset.i), 1);
+    renderPollOptions();
+  }));
+}
+
+function renderPolls(){
+  const db = loadDB();
+  pollOptions = ['', ''];
+  panel.innerHTML = `
+    <h2>Polls</h2>
+    ${db.polls.length === 0 ? '<div class="empty">No polls yet.</div>' : db.polls.map(p => `
+      <div class="list-row" data-id="${p.id}">
+        <div><strong>${escapeHTML(p.title)}</strong><br>
+        <span style="font-size:.85rem;color:#8a7360;">${p.votes.length} vote(s) &middot; ${isExpired(p.expiresAt) ? 'Closed' : 'Open until ' + fmtDate(p.expiresAt)} ${p.anonymous ? '&middot; Anonymous' : ''}</span></div>
+        <div class="row">
+          <button class="btn ghost small view-votes">Who Voted</button>
+          <button class="btn danger small del-poll">Delete</button>
+        </div>
+      </div>`).join('')}
+    <fieldset style="margin-top:20px;">
+      <legend>Create Poll</legend>
+      <div class="form-grid">
+        <div class="field"><label>Title / Question</label><input type="text" id="pTitle" required></div>
+        <div id="pollOptList"></div>
+        <button type="button" class="btn ghost small" id="addPollOpt">+ Option</button>
+        <div class="field"><label>Expiration date</label><input type="date" id="pDate" required></div>
+        <label><input type="checkbox" id="pAnon"> Anonymous (admin can still see who voted below)</label>
+        <label><input type="checkbox" id="pPct" checked> Show results as percentage (unchecked = show raw vote counts)</label>
+        <button type="button" class="btn full" id="createPoll">Create Poll</button>
+      </div>
+    </fieldset>`;
+
+  panel.querySelectorAll('.del-poll').forEach(btn => btn.addEventListener('click', (e) => {
+    const id = e.target.closest('.list-row').dataset.id;
+    const fresh = loadDB();
+    fresh.polls = fresh.polls.filter(p => p.id !== id);
+    saveDB(fresh);
+    renderPolls();
+  }));
+  panel.querySelectorAll('.view-votes').forEach(btn => btn.addEventListener('click', (e) => {
+    const id = e.target.closest('.list-row').dataset.id;
+    const poll = db.polls.find(p => p.id === id);
+    const rows = poll.votes.map(v => `<div class="list-row"><span>${escapeHTML(v.username)}</span><span>${escapeHTML(poll.options[v.optionIndex])}</span></div>`).join('') || '<div class="empty">No votes yet.</div>';
+    openModal(`<h2>${escapeHTML(poll.title)} — Voters</h2>${rows}`);
+  }));
+
+  document.getElementById('addPollOpt').addEventListener('click', () => { pollOptions.push(''); renderPollOptions(); });
+  document.getElementById('createPoll').addEventListener('click', () => {
+    const title = document.getElementById('pTitle').value.trim();
+    const dateVal = document.getElementById('pDate').value;
+    const opts = pollOptions.map(o => o.trim()).filter(Boolean);
+    if(!title || !dateVal || opts.length < 2){
+      alert('Please add a title, expiration date, and at least two options.');
+      return;
+    }
+    const fresh = loadDB();
+    fresh.polls.push({
+      id: uid(),
+      title,
+      options: opts,
+      anonymous: document.getElementById('pAnon').checked,
+      showPercentage: document.getElementById('pPct').checked,
+      votes: [],
+      expiresAt: new Date(dateVal).getTime(),
+      createdAt: Date.now()
+    });
+    saveDB(fresh);
+    renderPolls();
+  });
+
+  renderPollOptions();
+}
+
+/* ================= DIOCESES ================= */
+function renderDioceses(){
+  const db = loadDB();
+  panel.innerHTML = `
+    <h2>Dioceses</h2>
+    ${db.dioceses.length === 0 ? '<div class="empty">No dioceses yet.</div>' : db.dioceses.map(d => `
+      <div class="list-row" data-id="${d.id}">
+        <div><strong>${escapeHTML(d.name)}</strong> ${d.important ? '<span class="chip">Important</span>' : ''}</div>
+        <button class="btn danger small del-dio">Delete</button>
+      </div>`).join('')}
+    <fieldset style="margin-top:20px;">
+      <legend>Add Diocese</legend>
+      <form id="dioForm" class="form-grid">
+        <div class="field"><label>Name</label><input type="text" id="dName" required></div>
+        <div class="field"><label>Photo</label><input type="file" id="dImage" accept="image/*"></div>
+        <label><input type="checkbox" id="dImportant"> Important (shown larger, at the top)</label>
+        <button type="submit" class="btn full">Add Diocese</button>
+      </form>
+    </fieldset>`;
+
+  panel.querySelectorAll('.del-dio').forEach(btn => btn.addEventListener('click', (e) => {
+    const id = e.target.closest('.list-row').dataset.id;
+    const fresh = loadDB();
+    fresh.dioceses = fresh.dioceses.filter(d => d.id !== id);
+    saveDB(fresh);
+    renderDioceses();
+  }));
+
+  document.getElementById('dioForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const file = document.getElementById('dImage').files[0];
+    const image = file ? await fileToDataURL(file) : '';
+    const fresh = loadDB();
+    fresh.dioceses.push({
+      id: uid(),
+      name: document.getElementById('dName').value.trim(),
+      image,
+      important: document.getElementById('dImportant').checked
+    });
+    saveDB(fresh);
+    renderDioceses();
+  });
+}
+
+/* ================= BOOKS ================= */
+function renderBooks(){
+  const db = loadDB();
+  panel.innerHTML = `
+    <h2>Liturgical Books</h2>
+    ${db.books.length === 0 ? '<div class="empty">No books yet.</div>' : db.books.map(b => `
+      <div class="list-row" data-id="${b.id}">
+        <div><strong>${escapeHTML(b.name)}</strong><br>
+        <span style="font-size:.85rem;color:#8a7360;">${escapeHTML(b.description || '')}</span></div>
+        <button class="btn danger small del-book">Delete</button>
+      </div>`).join('')}
+    <fieldset style="margin-top:20px;">
+      <legend>Add Book</legend>
+      <form id="bookForm" class="form-grid">
+        <div class="field"><label>Name</label><input type="text" id="bName" required></div>
+        <div class="field"><label>Description</label><input type="text" id="bDesc"></div>
+        <div class="field"><label>Google Drive link (PDF)</label><input type="url" id="bLink" placeholder="https://drive.google.com/..." required></div>
+        <button type="submit" class="btn full">Add Book</button>
+      </form>
+    </fieldset>`;
+
+  panel.querySelectorAll('.del-book').forEach(btn => btn.addEventListener('click', (e) => {
+    const id = e.target.closest('.list-row').dataset.id;
+    const fresh = loadDB();
+    fresh.books = fresh.books.filter(b => b.id !== id);
+    saveDB(fresh);
+    renderBooks();
+  }));
+
+  document.getElementById('bookForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const fresh = loadDB();
+    fresh.books.push({
+      id: uid(),
+      name: document.getElementById('bName').value.trim(),
+      description: document.getElementById('bDesc').value.trim(),
+      link: document.getElementById('bLink').value.trim()
+    });
+    saveDB(fresh);
+    renderBooks();
+  });
+}
+
+/* ================= USERS ================= */
+function renderUsers(){
+  const db = loadDB();
+  const names = Object.keys(db.users).filter(n => n !== ADMIN_KEY);
+  panel.innerHTML = `
+    <h2>Registered Users</h2>
+    ${names.length === 0 ? '<div class="empty">No users have signed in yet.</div>' : names.map(n => `
+      <div class="list-row"><span>${escapeHTML(n)}</span><span style="font-size:.85rem;color:#8a7360;">Joined ${fmtDate(db.users[n].joined)}</span></div>`).join('')}`;
+}
+
+render('news');
+</script>
+</body>
+</html>
